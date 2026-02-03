@@ -39,8 +39,32 @@ def callback():
 def handle_message(event):
     user_msg = event.message.text
     try:
-        # 讓 Gemini 思考回應
-        response = model.generate_content(user_msg)
+        # 設定安全過濾器為「不阻擋」 (BLOCK_NONE)
+        safety_settings = [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+            },
+        ]
+
+        # 呼叫 Gemini (帶入安全設定)
+        response = model.generate_content(
+            user_msg, 
+            safety_settings=safety_settings
+        )
+        
         reply_text = response.text
         
         # 回傳給 Line
@@ -49,16 +73,17 @@ def handle_message(event):
             TextSendMessage(text=reply_text)
         )
     except Exception as e:
-        # 如果出錯 (例如 Gemini 擋掉敏感詞)，回報錯誤
-        error_msg = f"發生錯誤: {str(e)}"
-        print(error_msg)
+        # 【除錯模式】直接把錯誤原因回傳到 Line 給你看
+        error_msg = f"Gemini 報錯了: {str(e)}"
+        print(error_msg) # 也印在 Log 裡
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="抱歉，我現在有點錯亂，請再試一次。")
+            TextSendMessage(text=error_msg) # 讓你在手機上直接看到死因
         )
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+
 
 
