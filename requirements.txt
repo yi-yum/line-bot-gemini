@@ -3,3 +3,4 @@ line-bot-sdk
 google-generativeai>=0.8.3
 gunicorn
 yfinance
+duckduckgo-search
