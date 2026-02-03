@@ -7,10 +7,11 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
 import yfinance as yf
+from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 
-# 1. 讀取環境變數
+# 1. 環境變數
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -19,31 +20,36 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 genai.configure(api_key=GEMINI_API_KEY)
+# 使用 2.5 Flash 模型
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- 【新增】全域變數：用來暫存大家的對話紀錄 ---
-# 格式: { 'User_ID_123': ChatSession物件, 'User_ID_456': ChatSession物件 }
+# 記憶庫
 user_sessions = {}
 
-# --- 股票小幫手函式 (保持不變) ---
+# --- 工具 1: 查股票 ---
 def get_stock_info(symbol):
     try:
         if symbol.isdigit() and len(symbol) == 4:
             symbol = f"{symbol}.TW"
-        
         stock = yf.Ticker(symbol)
         data = stock.history(period="1d")
-        
-        if data.empty:
-            return None
-            
-        current_price = data.iloc[-1]['Close']
-        info = stock.info
-        name = info.get('longName', symbol)
-        
-        return f"【股票數據】\n代號: {symbol}\n名稱: {name}\n最新收盤價: {current_price}\n(請參考此數據回答)"
+        if data.empty: return None
+        price = data.iloc[-1]['Close']
+        name = stock.info.get('longName', symbol)
+        return f"【股票快搜】{name} ({symbol}) 收盤價: {price}"
+    except: return None
+
+# --- 工具 2: 聯網搜尋 (DuckDuckGo) ---
+def web_search(query):
+    try:
+        results = DDGS().text(query, max_results=3)
+        if not results: return None
+        summary = "【網路搜尋結果】:\n"
+        for i, r in enumerate(results, 1):
+            summary += f"{i}. {r['title']}: {r['body']}\n"
+        return summary
     except Exception as e:
-        return None
+        return f"搜尋失敗: {str(e)}"
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -57,53 +63,54 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_id = event.source.user_id # 取得發話者的 ID
-    user_msg = event.message.text
+    user_id = event.source.user_id
+    user_msg = event.message.text.strip()
     
-    # 1. 檢查這個人是不是第一次來，如果是，幫他開一個新的聊天室記憶
+    # 初始化記憶
     if user_id not in user_sessions:
-        # start_chat 會開啟一個有 history 的模式
         user_sessions[user_id] = model.start_chat(history=[])
-    
-    # 取出這個人的專屬聊天室
     chat = user_sessions[user_id]
 
-    # 2. 股票邏輯偵測
-    stock_code = None
-    match = re.search(r'\b\d{4}\b', user_msg) 
-    if match:
-        stock_code = match.group(0)
+    # --- 智慧判斷邏輯 (簡易版 Agent) ---
+    tool_output = ""
     
-    context_data = ""
-    if stock_code:
-        stock_info = get_stock_info(stock_code)
+    # 1. 判斷是否查股票 (4碼數字)
+    stock_match = re.search(r'\b\d{4}\b', user_msg)
+    if stock_match:
+        stock_info = get_stock_info(stock_match.group(0))
         if stock_info:
-            context_data = f"\n\n[系統補充資料]:\n{stock_info}"
-    
+            tool_output += stock_info + "\n"
+
+    # 2. 判斷是否需要上網搜尋 (關鍵字觸發)
+    # 這裡我們用簡單的關鍵字，如果要更聰明可以讓 Gemini 決定
+    search_keywords = ["搜尋", "查一下", "新聞", "最新的", "是誰", "什麼是"]
+    if any(k in user_msg for k in search_keywords):
+        # 移除關鍵字後再去搜，效果比較好
+        query = user_msg
+        for k in search_keywords:
+            query = query.replace(k, "")
+        
+        search_res = web_search(query)
+        if search_res:
+            tool_output += "\n" + search_res
+
+    # 3. 組合 Prompt
+    # 如果有工具產生的資料，就加在前面餵給 Gemini
+    final_prompt = user_msg
+    if tool_output:
+        final_prompt = f"{tool_output}\n\n使用者問題: {user_msg}\n(請根據上方資料回答，如果是股票請分析，如果是搜尋結果請總結)"
+
     try:
-        # 3. 傳送訊息給 Gemini (使用 chat.send_message 而不是 model.generate_content)
-        # 這樣 Gemini 才會把這次對話寫入 history
-        final_prompt = user_msg + context_data
-        
         response = chat.send_message(final_prompt)
-        reply_text = response.text
-        
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=reply_text)
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
     except Exception as e:
-        # 如果對話太長或出錯，清空記憶重來
+        # 記憶重置防呆
         user_sessions[user_id] = model.start_chat(history=[])
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=f"記憶體重置 (錯誤: {str(e)})，請重新輸入。")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="我剛剛恍神了，請再說一次。"))
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-
 
 
 
