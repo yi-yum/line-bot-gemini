@@ -19,7 +19,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 genai.configure(api_key=GEMINI_API_KEY)
 # 使用最快的 Flash 模型
-model = genai.GenerativeModel('gemini-3-flash')
+model = genai.GenerativeModel('gemini-3.0-flash')
 
 # 3. 監聽 Line 的訊息 (Webhook)
 @app.route("/callback", methods=['POST'])
@@ -60,4 +60,5 @@ def handle_message(event):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+
 
