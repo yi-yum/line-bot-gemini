@@ -38,52 +38,55 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_msg = event.message.text
-    try:
-        # 設定安全過濾器為「不阻擋」 (BLOCK_NONE)
-        safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE"
-            },
-        ]
+    
+    # --- 診斷密技：輸入 "查模型" 就列出清單 ---
+    if user_msg == "查模型":
+        try:
+            model_list = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    model_list.append(m.name)
+            
+            # 把清單整理成文字
+            reply_text = "目前可用的模型：\n" + "\n".join(model_list)
+            
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply_text)
+            )
+            return # 結束，不往下跑
+        except Exception as e:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"查詢失敗: {str(e)}")
+            )
+            return
 
-        # 呼叫 Gemini (帶入安全設定)
-        response = model.generate_content(
-            user_msg, 
-            safety_settings=safety_settings
-        )
+    # --- 正常對話邏輯 ---
+    try:
+        # 先暫時用最保險的 'gemini-pro' (通常這是永久通用別名)
+        # 等你查到正確名字後，再來改這一行
+        safe_model = genai.GenerativeModel('gemini-pro') 
         
+        response = safe_model.generate_content(user_msg)
         reply_text = response.text
         
-        # 回傳給 Line
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=reply_text)
         )
     except Exception as e:
-        # 【除錯模式】直接把錯誤原因回傳到 Line 給你看
-        error_msg = f"Gemini 報錯了: {str(e)}"
-        print(error_msg) # 也印在 Log 裡
+        error_msg = f"還是報錯: {str(e)}"
+        print(error_msg)
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=error_msg) # 讓你在手機上直接看到死因
+            TextSendMessage(text=error_msg)
         )
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
